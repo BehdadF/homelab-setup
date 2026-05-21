@@ -1866,8 +1866,10 @@ services:
       - AUTHENTIK_POSTGRESQL__NAME=authentik
       - AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASSWORD}
       - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_REDIS__HOST=authentik-redis
     depends_on:
       - authentik-db
+      - authentik-redis
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:latest
@@ -1887,8 +1889,15 @@ services:
       - AUTHENTIK_POSTGRESQL__NAME=authentik
       - AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASSWORD}
       - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_REDIS__HOST=authentik-redis
     depends_on:
       - authentik-db
+      - authentik-redis
+
+  authentik-redis:
+    image: redis:8-alpine
+    container_name: authentik-redis
+    restart: always
 
   authentik-db:
     image: postgres:16-alpine
