@@ -532,6 +532,7 @@ svc_url() {
     local name="$1" ip="$2"
     local scheme="http"
     [[ "${SVC_NEEDS_HTTPS[$name]:-false}" == "true" ]] && scheme="https"
+    [[ "$name" == "pritunl" ]] && scheme="https"
     echo "${scheme}://${ip}:${SVC_PORT[$name]}"
 }
 
@@ -1415,23 +1416,38 @@ EOF
     info "Starting Pritunl VPN…"
     dc "${COMPOSE_DIR}/pritunl" up -d
     mark_installed pritunl
+
+    # Wait for Pritunl to finish initial setup, then rebind web UI to our port
+    info "Waiting for Pritunl to initialize…"
+    local attempts=0
+    until docker exec pritunl pritunl set-setting app.server_port "$port" &>/dev/null \
+          || (( attempts++ >= 30 )); do
+        sleep 2
+    done
+
+    if (( attempts < 30 )); then
+        docker exec pritunl pritunl set-setting app.redirect_server false &>/dev/null || true
+        docker restart pritunl &>/dev/null
+        sleep 3
+        success "Pritunl web UI bound to port ${port}."
+    else
+        warn "Could not configure Pritunl port. Web UI may be on https://${ip}:443 instead."
+    fi
+
     update_dashboard
 
     local setup_key=""
-    local attempts=0
-    until [[ -n "$setup_key" ]] || (( attempts++ >= 15 )); do
-        sleep 2
-        setup_key=$(docker logs pritunl 2>/dev/null \
-            | grep -oP 'setup-key: \K[a-f0-9]+' | tail -1 || true)
-    done
+    setup_key=$(docker logs pritunl 2>/dev/null \
+        | grep -oP 'setup-key: \K[a-f0-9]+' | tail -1 || true)
 
-    success "Pritunl VPN    → http://${ip}:${port}"
+    success "Pritunl VPN    → https://${ip}:${port}"
     if [[ -n "$setup_key" ]]; then
         info  "Setup key      → ${setup_key}"
     else
         warn  "Setup key not yet available — run:  docker logs pritunl | grep setup-key"
     fi
     info  "Initial credentials: admin / admin  (change immediately after login)"
+    warn  "Accept the self-signed certificate warning in your browser."
     warn  "Port-forward UDP 1194 on your router to ${ip} for VPN client access."
 }
 
