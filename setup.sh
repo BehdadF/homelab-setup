@@ -95,6 +95,7 @@ reg prometheus   9090   "Prometheus — metrics collection & alerting"         m
 reg grafana      3100   "Grafana — metrics visualization dashboards"         monitoring false
 reg freshrss     8280   "FreshRSS — RSS feed aggregator"                     productivity false
 reg adguard      8053   "AdGuard Home — network-wide DNS ad blocker"         network    false
+reg linkding     8380   "Linkding — bookmark manager"                        productivity false
 
 get_arch() {
     local arch
@@ -1820,6 +1821,45 @@ EOF
     info  "Complete the setup wizard on first visit."
     warn  "In the wizard, set web UI listen address to 0.0.0.0:3000 (not port 80)."
     warn  "Point your router's DNS to ${ip} for network-wide ad blocking."
+}
+
+setup_linkding() {
+    local ip; ip=$(get_current_ip)
+    mkdir -p "${COMPOSE_DIR}/linkding" "${DATA_DIR}/linkding"
+
+    local port="${SVC_PORT[linkding]}"
+    local _env="${COMPOSE_DIR}/linkding/.env"
+    local superuser_pass; superuser_pass=$(load_env_var "$_env" LD_SUPERUSER_PASSWORD)
+    superuser_pass=${superuser_pass:-$(gen_password)}
+    [[ -f "$_env" ]] && info "Reusing existing Linkding credentials."
+
+    cat > "${COMPOSE_DIR}/linkding/.env" << EOF
+LD_SUPERUSER_PASSWORD=${superuser_pass}
+EOF
+    chmod 600 "${COMPOSE_DIR}/linkding/.env"
+
+    cat > "${COMPOSE_DIR}/linkding/docker-compose.yml" << EOF
+services:
+  linkding:
+    image: sissbruecker/linkding:latest
+    container_name: linkding
+    restart: always
+    ports:
+      - "${port}:9090"
+    volumes:
+      - ${DATA_DIR}/linkding:/etc/linkding/data
+    environment:
+      - LD_SUPERUSER_NAME=admin
+      - LD_SUPERUSER_PASSWORD=\${LD_SUPERUSER_PASSWORD}
+EOF
+
+    require_port "$port" linkding
+    info "Starting Linkding…"
+    dc "${COMPOSE_DIR}/linkding" up -d
+    mark_installed linkding
+    update_dashboard
+    success "Linkding       → http://${ip}:${port}"
+    info  "Login          → admin / (see ${COMPOSE_DIR}/linkding/.env)"
 }
 
 setup_freshrss() {
