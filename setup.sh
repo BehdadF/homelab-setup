@@ -1521,11 +1521,13 @@ EOF
     dc "${COMPOSE_DIR}/headscale" up -d
     mark_installed headscale
     update_dashboard
-    success "Headscale      → http://${ip}:${port}"
-    info  "Register a machine:"
+    success "Headscale ready (no web UI — CLI only)"
+    info  "Setup:"
     info  "  docker exec headscale headscale users create myuser"
-    info  "  docker exec headscale headscale preauthkeys create --user myuser --reusable"
-    info  "  On client: tailscale up --login-server http://${ip}:${port}"
+    info  "  docker exec headscale headscale users list          # note the user ID"
+    info  "  docker exec headscale headscale preauthkeys create --user USER_ID"
+    info  "  On client: tailscale up --login-server http://${ip}:${port} --authkey YOUR_KEY"
+    info  "Generate a new key per device. Add --reusable only if needed."
 }
 
 setup_uptimekuma() {

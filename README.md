@@ -124,12 +124,14 @@ sudo bash /opt/self-hosting/setup.sh --update-ip 192.168.1.100
 docker logs pritunl | grep setup-key
 ```
 
-**Headscale**:
+**Headscale** — no web UI, CLI only:
 ```bash
 docker exec headscale headscale users create myuser
-docker exec headscale headscale preauthkeys create --user myuser --reusable
-tailscale up --login-server http://SERVER_IP:8085
+docker exec headscale headscale users list
+docker exec headscale headscale preauthkeys create --user USER_ID
+tailscale up --login-server http://SERVER_IP:8085 --authkey YOUR_KEY
 ```
+Generate a new key per device. Add `--reusable` only if you need one key for multiple devices.
 
 **MinIO** — console on `:9001`, S3 API on `:9100`.
 
