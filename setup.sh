@@ -564,7 +564,7 @@ EOF
     local has_services=false
 
     for name in "${SVC_NAMES[@]}"; do
-        [[ "$name" == "dashboard" || "$name" == "caddy" ]] && continue
+        [[ "$name" == "dashboard" || "$name" == "caddy" || "$name" == "headscale" ]] && continue
         is_installed "$name"         || continue
 
         has_services=true
