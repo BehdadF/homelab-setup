@@ -51,6 +51,7 @@ sudo bash /opt/self-hosting/setup.sh --immich
 | Netdata | 19999 | Monitoring | Real-time system metrics |
 | Prometheus | 9090 | Monitoring | Metrics collection |
 | Grafana | 3100 | Monitoring | Metrics dashboards |
+| FreshRSS | 8280 | Productivity | RSS feed aggregator |
 
 ## HTTPS
 

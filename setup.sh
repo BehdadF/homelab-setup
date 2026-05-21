@@ -93,6 +93,7 @@ reg uptimekuma   3001   "Uptime Kuma — service uptime monitoring"            m
 reg netdata      19999  "Netdata — real-time system performance metrics"     monitoring false
 reg prometheus   9090   "Prometheus — metrics collection & alerting"         monitoring false
 reg grafana      3100   "Grafana — metrics visualization dashboards"         monitoring false
+reg freshrss     8280   "FreshRSS — RSS feed aggregator"                     productivity false
 
 get_arch() {
     local arch
@@ -1770,6 +1771,42 @@ EOF
     info  "  2. Copy the Client ID and Secret into:"
     info  "     ${COMPOSE_DIR}/woodpecker/.env"
     info  "  3. Restart: sudo bash setup.sh --restart woodpecker"
+}
+
+setup_freshrss() {
+    local ip; ip=$(get_current_ip)
+    mkdir -p "${COMPOSE_DIR}/freshrss" "${DATA_DIR}/freshrss"
+
+    local port="${SVC_PORT[freshrss]}"
+
+    local tz
+    tz=$(cat /etc/timezone 2>/dev/null \
+         || timedatectl show --property=Timezone --value 2>/dev/null \
+         || echo "UTC")
+
+    cat > "${COMPOSE_DIR}/freshrss/docker-compose.yml" << EOF
+services:
+  freshrss:
+    image: freshrss/freshrss:latest
+    container_name: freshrss
+    restart: always
+    ports:
+      - "${port}:80"
+    volumes:
+      - ${DATA_DIR}/freshrss/data:/var/www/FreshRSS/data
+      - ${DATA_DIR}/freshrss/extensions:/var/www/FreshRSS/extensions
+    environment:
+      - TZ=${tz}
+      - CRON_MIN=2,32
+EOF
+
+    require_port "$port" freshrss
+    info "Starting FreshRSS…"
+    dc "${COMPOSE_DIR}/freshrss" up -d
+    mark_installed freshrss
+    update_dashboard
+    success "FreshRSS       → http://${ip}:${port}"
+    info  "Create your admin account on first visit."
 }
 
 restart_service() {
