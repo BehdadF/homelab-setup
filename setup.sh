@@ -2097,15 +2097,14 @@ EOF
 }
 
 install_systemd_services() {
-    if systemctl is-active --quiet self-hosting-ip-monitor 2>/dev/null; then
-        dim "  ↷ ip-monitor service already active — skipping"
-        return 0
-    fi
-
     if [[ "${SCRIPT_PATH}" != "${INSTALL_DIR}/setup.sh" ]]; then
         cp "${SCRIPT_PATH}" "${INSTALL_DIR}/setup.sh"
         chmod 755 "${INSTALL_DIR}/setup.sh"
         info "Installed setup.sh → ${INSTALL_DIR}/setup.sh"
+    fi
+
+    if systemctl is-active --quiet self-hosting-ip-monitor 2>/dev/null; then
+        return 0
     fi
 
     create_ip_monitor_script
