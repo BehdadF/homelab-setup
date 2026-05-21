@@ -1,31 +1,9 @@
 #!/usr/bin/env bash
-# =============================================================
-#  setup.sh — Self-Hosted Services Manager
-#  https://github.com/YOUR_REPO (update when published)
-#
-#  Supports: Ubuntu 22.04+ on amd64 and arm64
-#            (Raspberry Pi 4/5, Mac via UTM/Parallels, etc.)
-#
-#  Usage:
-#    sudo ./setup.sh --help
-#    sudo ./setup.sh --list
-#    sudo ./setup.sh --vaultwarden --nextcloud --immich
-#    sudo ./setup.sh --all
-#    sudo ./setup.sh --uninstall seafile
-#    sudo ./setup.sh --uninstall seafile --purge
-#
-#  To add a new service:
-#    1. Add a reg() entry in the Service Registry section
-#    2. Add a setup_<name>() function (follow existing pattern)
-#    3. If the service embeds the server IP in its config,
-#       set ip_aware=true and add a case to handle_ip_change()
-# =============================================================
+# setup.sh — homelab-setup
+# https://github.com/behdadf/homelab-setup
+# Ubuntu 22.04+ (amd64/arm64). Run with sudo.
 set -euo pipefail
 IFS=$'\n\t'
-
-# =============================================================
-# Constants
-# =============================================================
 
 readonly VERSION="1.0.0"
 readonly SCRIPT_NAME="$(basename "$0")"
@@ -39,14 +17,7 @@ readonly LOGS_DIR="${INSTALL_DIR}/logs"
 readonly INSTALLED_FILE="${INSTALL_DIR}/.installed"
 readonly IP_FILE="${INSTALL_DIR}/.current-ip"
 
-# Detected at runtime by detect_docker_compose()
 DC_CMD=""
-
-# =============================================================
-# Logging & Colors
-# =============================================================
-# Colors are disabled automatically when stdout is not a terminal
-# (e.g. when piped to a log file).
 
 if [[ -t 1 ]]; then
     C_RED='\033[0;31m'
@@ -71,23 +42,9 @@ header()  { echo -e "\n${C_BOLD}${C_CYAN}══  $*  ══${C_RESET}"; }
 dim()     { echo -e "${C_DIM}$*${C_RESET}"; }
 blank()   { echo ""; }
 
-# =============================================================
-# Service Registry
-# =============================================================
-# Each service is registered with:
-#   reg <name> <port> "<description>" <category> [ip_aware]
-#
-# ip_aware = true  → service embeds the server IP in its config
-#                    and must be reconfigured when the IP changes
-# ip_aware = false → service binds dynamically; no reconfiguration needed
-# =============================================================
-
-declare -a  SVC_NAMES       # insertion-ordered list of all service names
-declare -A  SVC_PORT        # primary web UI / API port
-declare -A  SVC_DESC        # one-line human description
-declare -A  SVC_CAT         # category for grouping in --list output
-declare -A  SVC_IP_AWARE    # "true" | "false"
-declare -A  SVC_NEEDS_HTTPS # "true" → routed through Caddy; browser requires HTTPS
+# reg <name> <port> "<description>" <category> [ip_aware] [needs_https]
+declare -a  SVC_NAMES
+declare -A  SVC_PORT SVC_DESC SVC_CAT SVC_IP_AWARE SVC_NEEDS_HTTPS
 
 reg() {
     local name="$1" port="$2" desc="$3" cat="$4" \
@@ -136,11 +93,6 @@ reg netdata      19999  "Netdata — real-time system performance metrics"     m
 reg prometheus   9090   "Prometheus — metrics collection & alerting"         monitoring false
 reg grafana      3100   "Grafana — metrics visualization dashboards"         monitoring false
 
-# =============================================================
-# Phase 2 — OS Detection & Docker Install
-# =============================================================
-
-# Normalise kernel arch to the Docker/Debian convention.
 get_arch() {
     local arch
     arch=$(uname -m)
@@ -157,9 +109,7 @@ check_os() {
 
     [[ -f /etc/os-release ]] || die "Cannot detect OS — /etc/os-release not found."
 
-    # Extract values with grep+cut — avoids sourcing the file, which would
-    # conflict with our own readonly VERSION variable (and any other readonly
-    # vars that happen to share names with os-release keys).
+    # grep+cut instead of sourcing — avoids readonly VERSION collision
     local os_id os_pretty os_version_id os_id_like
     os_id=$(         grep -m1 '^ID='            /etc/os-release | cut -d= -f2 | tr -d '"' || echo "")
     os_pretty=$(     grep -m1 '^PRETTY_NAME='   /etc/os-release | cut -d= -f2 | tr -d '"' || echo "unknown")
@@ -173,7 +123,6 @@ check_os() {
     info "Arch    : ${arch}"
     info "Kernel  : $(uname -r)"
 
-    # Require Ubuntu or Debian (including derivatives like Raspberry Pi OS)
     case "${os_id}" in
         ubuntu|debian) ;;
         *)
@@ -183,7 +132,6 @@ check_os() {
             ;;
     esac
 
-    # Minimum version check for Ubuntu
     if [[ "${os_id}" == "ubuntu" ]]; then
         local ver_major
         ver_major=$(echo "${os_version_id}" | cut -d. -f1)
@@ -202,7 +150,6 @@ check_os() {
 install_docker() {
     header "Docker"
 
-    # Already installed and daemon is running — nothing to do
     if docker info &>/dev/null 2>&1; then
         local version
         version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
@@ -212,17 +159,14 @@ install_docker() {
 
     info "Installing Docker from the official repository…"
 
-    # Prerequisites
     apt-get update -qq
     apt-get install -y -qq ca-certificates curl gnupg lsb-release
 
-    # GPG key
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
 
-    # Apt source — use the OS codename from os-release
     local codename
     codename=$(grep -m1 '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2 | tr -d '"' || echo "")
     [[ -z "$codename" ]] && codename=$(lsb_release -cs 2>/dev/null || echo "noble")
@@ -242,10 +186,8 @@ https://download.docker.com/linux/ubuntu ${codename} stable" \
         docker-buildx-plugin \
         docker-compose-plugin
 
-    # Enable and start the daemon
     systemctl enable --now docker
 
-    # Let the invoking user run docker without sudo (takes effect on next login)
     if [[ -n "${SUDO_USER:-}" ]]; then
         usermod -aG docker "${SUDO_USER}"
         info "Added '${SUDO_USER}' to the docker group (re-login to take effect)"
@@ -260,7 +202,6 @@ check_prerequisites() {
     header "Prerequisites"
     local failed=false
 
-    # Docker daemon
     if docker info &>/dev/null 2>&1; then
         success "Docker daemon is running"
     else
@@ -268,7 +209,6 @@ check_prerequisites() {
         failed=true
     fi
 
-    # Docker Compose
     if docker compose version &>/dev/null 2>&1; then
         local cv
         cv=$(docker compose version --short 2>/dev/null || echo "unknown")
@@ -280,7 +220,6 @@ check_prerequisites() {
         failed=true
     fi
 
-    # openssl (for password generation)
     if command -v openssl &>/dev/null; then
         success "openssl available"
     else
@@ -288,7 +227,6 @@ check_prerequisites() {
         failed=true
     fi
 
-    # curl (used in service setup)
     if command -v curl &>/dev/null; then
         success "curl available"
     else
@@ -296,8 +234,6 @@ check_prerequisites() {
         failed=true
     fi
 
-    # Port 80 check — warn if occupied by a non-Docker process
-    # (Docker itself may already own it on a re-run, which is fine)
     local port80_pid
     port80_pid=$(ss -tlnp 'sport = :80' 2>/dev/null \
                     | awk 'NR>1 && /LISTEN/ {print $NF}' \
@@ -317,17 +253,11 @@ check_prerequisites() {
     success "All prerequisites satisfied"
 }
 
-# =============================================================
-# Utility Functions
-# =============================================================
-
 require_root() {
     [[ $EUID -eq 0 ]] || die "This script must be run as root.  Try: sudo $SCRIPT_NAME $*"
 }
 
-# Determine the server's LAN IP without making a network connection.
-# We ask the kernel which source IP it would use to reach 1.1.1.1
-# (a routing table lookup only — no packet is actually sent).
+# Routing table lookup — no packet sent.
 get_current_ip() {
     local ip
     ip=$(ip route get 1.1.1.1 2>/dev/null \
@@ -337,15 +267,8 @@ get_current_ip() {
     echo "${ip:-127.0.0.1}"
 }
 
-gen_password() {
-    # 32 hex characters — safe for use in URLs and config files
-    openssl rand -hex 16
-}
+gen_password() { openssl rand -hex 16; }
 
-# Read a variable from an existing .env file.
-# Returns the value (possibly empty) if the file or key doesn't exist.
-# Usage: val=$(load_env_var /path/to/.env KEY_NAME)
-#        val=${val:-$(gen_password)}
 load_env_var() {
     local env_file="$1" key="$2"
     if [[ -f "$env_file" ]]; then
@@ -353,13 +276,10 @@ load_env_var() {
     fi
 }
 
-# Return 0 if nothing is listening on TCP port $1, 1 otherwise.
 port_is_free() {
     ! ss -tln 2>/dev/null | awk 'NR>1{print $4}' | grep -qE ":${1}$"
 }
 
-# Die with a clear message if a port is already bound.
-# Call this before every `dc ... up -d` for services that bind host ports.
 require_port() {
     local port="$1" svc="${2:-service}"
     port_is_free "$port" \
@@ -381,7 +301,6 @@ mark_installed() {
 mark_uninstalled() {
     local name="$1"
     [[ -f "${INSTALLED_FILE}" ]] || return 0
-    # Use a temp file for portable in-place edit (works on GNU + BSD)
     local tmp
     tmp=$(mktemp)
     grep -vxF "$name" "${INSTALLED_FILE}" > "$tmp" || true
@@ -392,7 +311,6 @@ is_valid_service() {
     [[ -n "${SVC_PORT[$1]+x}" ]]
 }
 
-# Detect whether "docker compose" (plugin v2) or "docker-compose" (v1) is available.
 detect_docker_compose() {
     if docker compose version &>/dev/null 2>&1; then
         DC_CMD="docker compose"
@@ -403,19 +321,10 @@ detect_docker_compose() {
     fi
 }
 
-# dc <service_dir> <compose subcommand> [args…]
-#
-# Wraps docker compose so callers don't need to worry about v1/v2 or
-# where the compose file and .env live.
-#
-# Example:
-#   dc "${COMPOSE_DIR}/vaultwarden" up -d
-#   dc "${COMPOSE_DIR}/nextcloud"   down --remove-orphans
 dc() {
     [[ -n "$DC_CMD" ]] || die "Docker Compose not available. Run prerequisites first."
     local service_dir="$1"; shift
     local -a cmd
-    # IFS is '\n\t' globally — use space explicitly so "docker compose" splits correctly
     IFS=' ' read -ra cmd <<< "$DC_CMD"
     cmd+=(-f "${service_dir}/docker-compose.yml")
     [[ -f "${service_dir}/.env" ]] && cmd+=(--env-file "${service_dir}/.env")
@@ -437,15 +346,10 @@ init_dirs() {
     success "Directories ready under ${INSTALL_DIR}"
 }
 
-# =============================================================
-# Display Helpers
-# =============================================================
-
 list_services() {
     header "Available Services"
     blank
 
-    # Print each category once, in registry order, with its services.
     local -A printed_cats
     for name in "${SVC_NAMES[@]}"; do
         local cat="${SVC_CAT[$name]}"
@@ -491,7 +395,7 @@ list_installed() {
 print_usage() {
     cat <<EOF
 
-${C_BOLD}Self-Hosted Services Manager${C_RESET} v${VERSION}
+${C_BOLD}Homelab Setup${C_RESET} v${VERSION}
 
 ${C_BOLD}Usage:${C_RESET}
   sudo $SCRIPT_NAME [OPTIONS] [SERVICES]
@@ -546,13 +450,6 @@ ${C_BOLD}Notes:${C_RESET}
 EOF
 }
 
-# =============================================================
-# Service Setup Functions
-# =============================================================
-# Phase 3 — Homer Dashboard & Portainer
-# =============================================================
-
-# FontAwesome 5 Free icon for each category (used in Homer config)
 _cat_icon() {
     case "$1" in
         system)       echo "fas fa-cogs" ;;
@@ -567,7 +464,6 @@ _cat_icon() {
     esac
 }
 
-# FontAwesome 5 Free icon per service
 _svc_icon() {
     case "$1" in
         portainer)   echo "fab fa-docker" ;;
@@ -592,7 +488,6 @@ _svc_icon() {
     esac
 }
 
-# Return the correct URL scheme for a service (https if it goes through Caddy)
 svc_url() {
     local name="$1" ip="$2"
     local scheme="http"
@@ -600,8 +495,6 @@ svc_url() {
     echo "${scheme}://${ip}:${SVC_PORT[$name]}"
 }
 
-# Write (or rewrite) the Homer config.yml for a given server IP.
-# Called at install time and every time the IP changes.
 generate_homer_config() {
     local ip="$1"
     local config_file="${CONFIG_DIR}/homer/config.yml"
@@ -610,7 +503,6 @@ generate_homer_config() {
     local hostname
     hostname=$(hostname -s 2>/dev/null || echo "homeserver")
 
-    # ── Header ──────────────────────────────────────────────
     cat > "$config_file" << EOF
 ---
 # Generated by setup.sh — do not edit manually.
@@ -627,19 +519,16 @@ connectivityCheck: false
 services:
 EOF
 
-    # ── Service items grouped by category ───────────────────
     local -A printed_cats
     local has_services=false
 
     for name in "${SVC_NAMES[@]}"; do
-        [[ "$name" == "dashboard" ]] && continue   # page doesn't link to itself
-        [[ "$name" == "caddy"     ]] && continue   # infrastructure, not a user-facing service
+        [[ "$name" == "dashboard" || "$name" == "caddy" ]] && continue
         is_installed "$name"         || continue
 
         has_services=true
         local cat="${SVC_CAT[$name]}"
 
-        # Print category header once
         if [[ -z "${printed_cats[$cat]+x}" ]]; then
             printed_cats["$cat"]=1
             printf '  - name: "%s"\n'  "${cat^}"          >> "$config_file"
@@ -654,7 +543,6 @@ EOF
         printf '        target: "_blank"\n'                                   >> "$config_file"
     done
 
-    # Placeholder when nothing else is installed yet
     if ! $has_services; then
         cat >> "$config_file" << 'EOF'
   - name: "Getting Started"
@@ -668,15 +556,12 @@ EOF
 EOF
     fi
 
-    # Ensure the Homer container (uid 1000) can read the file
     chmod 644 "$config_file"
     chmod 755 "$(dirname "$config_file")"
 
     success "Homer config → ${config_file}"
 }
 
-# Regenerate Homer config and signal the container to reload.
-# Called after every service install and on IP change.
 update_dashboard() {
     is_installed dashboard || return 0
     local ip
@@ -693,8 +578,6 @@ setup_dashboard() {
 
     generate_homer_config "$ip"
 
-    # We mount only config.yml (not the whole assets dir) so Homer can still
-    # serve its own bundled fonts, icons and CSS.
     cat > "${COMPOSE_DIR}/dashboard/docker-compose.yml" << EOF
 services:
   homer:
@@ -741,58 +624,17 @@ EOF
     success "Portainer → http://${ip}:9000"
 }
 
-# =============================================================
-# Service Setup Functions
-# =============================================================
-# Each function is a stub for now and will be replaced phase by phase.
-# The stub prints a clear message so callers know what is pending.
-#
-# When implementing a real setup function, follow this contract:
-#   1. mkdir -p "${COMPOSE_DIR}/<name>" "${DATA_DIR}/<name>"
-#   2. Write .env (use gen_password for secrets)
-#   3. Write docker-compose.yml
-#   4. Call: dc "${COMPOSE_DIR}/<name>" up -d
-#   5. Call: mark_installed "<name>"
-#   6. Call: update_dashboard   (refreshes Homer)
-#   7. Print any manual post-install steps the user must take
-
-_stub() {
-    local name="$1"
-    warn "setup_${name} is not yet implemented (scheduled for a later phase)."
-}
-
-# =============================================================
-# HTTPS Proxy — Caddy (installed via apt, runs as systemd service)
-# =============================================================
-# Caddy runs directly on the host (not in Docker) so it can manage
-# its local CA and cert storage without volume/permission complexity.
-#
-# Each HTTPS service's Docker container exposes its internal HTTP port
-# to localhost only (127.0.0.1:PROXY_PORT:80, where PROXY_PORT =
-# SVC_PORT + 10000). Caddy listens on the public SVC_PORT with TLS
-# and reverse-proxies to localhost:PROXY_PORT.
-#
-# Example — Vaultwarden (SVC_PORT=8200):
-#   Docker:  127.0.0.1:18200:80
-#   Caddy:   192.168.1.5:8200 { tls internal; reverse_proxy localhost:18200 }
-#   Browser: https://192.168.1.5:8200
-# =============================================================
-
-# Derive the localhost proxy port for an HTTPS service.
-# Convention: proxy_port = svc_port + 10000  (e.g. 8200 → 18200)
+# Caddy runs on the host (apt/systemd), not Docker.
+# HTTPS services bind 127.0.0.1:(port+10000), Caddy proxies with tls internal.
 proxy_port_for() {
     echo $(( ${SVC_PORT[$1]} + 10000 ))
 }
 
-# Build /etc/caddy/Caddyfile from all currently-installed HTTPS services.
 generate_caddyfile() {
     local ip="$1"
-    # Start with an empty file
     : > /etc/caddy/Caddyfile
 
-    # Disable HTTP->HTTPS redirect server so Caddy doesn't try to bind port 80
-    # (which is already used by the Homer dashboard).
-    # disable_redirects still lets Caddy manage and serve TLS certs normally.
+    # disable_redirects: don't bind port 80 (Homer owns it)
     cat >> /etc/caddy/Caddyfile << 'EOF'
 {
     auto_https disable_redirects
@@ -807,8 +649,6 @@ EOF
         local pub_port; pub_port="${SVC_PORT[$name]}"
         local prx_port; prx_port="$(proxy_port_for "$name")"
 
-        # Site address uses IP:PORT so Caddy puts the LAN IP in the cert SAN.
-        # tls internal uses Caddy's built-in local CA (no Let's Encrypt needed).
         cat >> /etc/caddy/Caddyfile << EOF
 ${ip}:${pub_port} {
     tls internal
@@ -833,8 +673,6 @@ setup_caddy() {
     apt-get update -qq
     apt-get install -y caddy
 
-    # Don't start Caddy yet — Caddyfile is empty until the first HTTPS service
-    # is installed. update_caddy() will start (or reload) it then.
     systemctl enable caddy
     systemctl stop caddy 2>/dev/null || true
 
@@ -842,20 +680,15 @@ setup_caddy() {
     success "Caddy installed and enabled — will start when first HTTPS service is configured"
 }
 
-# Called by any HTTPS service after it installs itself.
-# Rewrites /etc/caddy/Caddyfile and does a zero-downtime reload.
 update_caddy() {
     is_installed caddy || return 0
     local ip; ip=$(cat "${IP_FILE}" 2>/dev/null || get_current_ip)
     generate_caddyfile "$ip"
-    # reload-or-restart: starts Caddy if stopped (first service), reloads if running
     systemctl reload-or-restart caddy
     sleep 3
     export_caddy_cert
 }
 
-# Copy Caddy's root CA cert to a readable location and print trust instructions.
-# Caddy (apt) stores PKI data under the caddy user's home: /var/lib/caddy/
 export_caddy_cert() {
     local caddy_pki="/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
     local cert_dst="${DATA_DIR}/caddy-root.crt"
@@ -871,7 +704,6 @@ export_caddy_cert() {
         cp "$caddy_pki" "$cert_dst"
         chmod 644 "$cert_dst"
         success "Caddy root CA → ${cert_dst}"
-        # Print trust instructions only on the first export — not on every Caddy reload
         if $first_export; then
             warn  "Trust this cert once on every device that accesses HTTPS services:"
             info  "  macOS      : sudo security add-trusted-cert -d -r trustRoot \\"
@@ -884,10 +716,6 @@ export_caddy_cert() {
         warn "Then run:  sudo bash setup.sh --export-cert"
     fi
 }
-
-# =============================================================
-# Phase 4 — Security & Productivity Services
-# =============================================================
 
 setup_vaultwarden() {
     local ip; ip=$(get_current_ip)
@@ -905,7 +733,6 @@ ADMIN_TOKEN=${admin_token}
 EOF
     chmod 600 "${COMPOSE_DIR}/vaultwarden/.env"
 
-    # Port is bound to 127.0.0.1 only — Caddy (host) proxies HTTPS to it.
     cat > "${COMPOSE_DIR}/vaultwarden/docker-compose.yml" << EOF
 services:
   vaultwarden:
@@ -918,7 +745,7 @@ services:
       - ${DATA_DIR}/vaultwarden:/data
     environment:
       - DOMAIN=https://${ip}:8200
-      - ADMIN_TOKEN=${admin_token}
+      - ADMIN_TOKEN=\${ADMIN_TOKEN}
       - SIGNUPS_ALLOWED=true
       - WEBSOCKET_ENABLED=true
 EOF
@@ -942,14 +769,11 @@ setup_joplin() {
 
     local _env="${COMPOSE_DIR}/joplin/.env"
     local db_pass; db_pass=$(load_env_var "$_env" JOPLIN_DB_PASSWORD)
-    local admin_pass; admin_pass=$(load_env_var "$_env" JOPLIN_ADMIN_PASSWORD)
     db_pass=${db_pass:-$(gen_password)}
-    admin_pass=${admin_pass:-$(gen_password)}
     [[ -f "$_env" ]] && info "Reusing existing Joplin credentials."
 
     cat > "${COMPOSE_DIR}/joplin/.env" << EOF
 JOPLIN_DB_PASSWORD=${db_pass}
-JOPLIN_ADMIN_PASSWORD=${admin_pass}
 EOF
     chmod 600 "${COMPOSE_DIR}/joplin/.env"
 
@@ -969,7 +793,7 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_DATABASE=joplin
       - POSTGRES_USER=joplin
-      - POSTGRES_PASSWORD=${db_pass}
+      - POSTGRES_PASSWORD=\${JOPLIN_DB_PASSWORD}
     depends_on:
       - joplin-db
 
@@ -980,7 +804,7 @@ services:
     environment:
       - POSTGRES_DB=joplin
       - POSTGRES_USER=joplin
-      - POSTGRES_PASSWORD=${db_pass}
+      - POSTGRES_PASSWORD=\${JOPLIN_DB_PASSWORD}
     volumes:
       - ${DATA_DIR}/joplin/db:/var/lib/postgresql/data
 EOF
@@ -1033,10 +857,10 @@ services:
       - MYSQL_HOST=nextcloud-db
       - MYSQL_DATABASE=nextcloud
       - MYSQL_USER=nextcloud
-      - MYSQL_PASSWORD=${db_pass}
+      - MYSQL_PASSWORD=\${NC_DB_PASSWORD}
       - NEXTCLOUD_TRUSTED_DOMAINS=${ip} localhost 127.0.0.1
       - NEXTCLOUD_ADMIN_USER=admin
-      - NEXTCLOUD_ADMIN_PASSWORD=${admin_pass}
+      - NEXTCLOUD_ADMIN_PASSWORD=\${NC_ADMIN_PASSWORD}
       - REDIS_HOST=nextcloud-redis
     depends_on:
       - nextcloud-db
@@ -1048,10 +872,10 @@ services:
     restart: always
     command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
     environment:
-      - MYSQL_ROOT_PASSWORD=${db_root}
+      - MYSQL_ROOT_PASSWORD=\${NC_DB_ROOT_PASSWORD}
       - MYSQL_DATABASE=nextcloud
       - MYSQL_USER=nextcloud
-      - MYSQL_PASSWORD=${db_pass}
+      - MYSQL_PASSWORD=\${NC_DB_PASSWORD}
     volumes:
       - ${DATA_DIR}/nextcloud/db:/var/lib/mysql
 
@@ -1082,7 +906,6 @@ setup_paperless() {
     secret=${secret:-$(gen_password)$(gen_password)}
     [[ -f "$_env" ]] && info "Reusing existing Paperless credentials."
 
-    # Detect system timezone; fall back to UTC
     local tz
     tz=$(cat /etc/timezone 2>/dev/null \
          || timedatectl show --property=Timezone --value 2>/dev/null \
@@ -1112,8 +935,8 @@ services:
       - PAPERLESS_DBHOST=paperless-db
       - PAPERLESS_DBNAME=paperless
       - PAPERLESS_DBUSER=paperless
-      - PAPERLESS_DBPASS=${db_pass}
-      - PAPERLESS_SECRET_KEY=${secret}
+      - PAPERLESS_DBPASS=\${PAPERLESS_DB_PASSWORD}
+      - PAPERLESS_SECRET_KEY=\${PAPERLESS_SECRET_KEY}
       - PAPERLESS_TIME_ZONE=${tz}
       - PAPERLESS_OCR_LANGUAGE=eng
       - PAPERLESS_TIKA_ENABLED=1
@@ -1132,7 +955,7 @@ services:
     environment:
       - POSTGRES_DB=paperless
       - POSTGRES_USER=paperless
-      - POSTGRES_PASSWORD=${db_pass}
+      - POSTGRES_PASSWORD=\${PAPERLESS_DB_PASSWORD}
     volumes:
       - ${DATA_DIR}/paperless/db:/var/lib/postgresql/data
 
@@ -1166,10 +989,6 @@ EOF
     info  "First login   → http://${ip}:8010 (create superuser on first visit)"
     warn  "Drop documents into ${DATA_DIR}/paperless/consume/ for auto-import."
 }
-# =============================================================
-# Phase 5 — Storage, Media & Developer Tools
-# =============================================================
-
 setup_seafile() {
     local ip; ip=$(get_current_ip)
     mkdir -p "${COMPOSE_DIR}/seafile" \
@@ -1206,12 +1025,12 @@ services:
       - ${DATA_DIR}/seafile/data:/shared
     environment:
       - DB_HOST=seafile-db
-      - DB_ROOT_PASSWD=${db_root}
+      - DB_ROOT_PASSWD=\${SEAFILE_DB_ROOT}
       - SEAFILE_ADMIN_EMAIL=admin@seafile.local
-      - SEAFILE_ADMIN_PASSWORD=${admin_pass}
+      - SEAFILE_ADMIN_PASSWORD=\${SEAFILE_ADMIN_PASSWORD}
       - SEAFILE_SERVER_HOSTNAME=${ip}:${port}
       - SEAFILE_SERVER_LETSENCRYPT=false
-      - JWT_PRIVATE_KEY=${jwt_key}
+      - JWT_PRIVATE_KEY=\${SEAFILE_JWT_KEY}
       - TIME_ZONE=UTC
     depends_on:
       seafile-db:
@@ -1224,7 +1043,7 @@ services:
     container_name: seafile-db
     restart: always
     environment:
-      - MYSQL_ROOT_PASSWORD=${db_root}
+      - MYSQL_ROOT_PASSWORD=\${SEAFILE_DB_ROOT}
       - MYSQL_LOG_BIN=1
       - MYSQL_ROOT_HOST=%
     volumes:
@@ -1284,8 +1103,8 @@ services:
     volumes:
       - ${DATA_DIR}/minio:/data
     environment:
-      - MINIO_ROOT_USER=${root_user}
-      - MINIO_ROOT_PASSWORD=${root_password}
+      - MINIO_ROOT_USER=\${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=\${MINIO_ROOT_PASSWORD}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
@@ -1383,7 +1202,6 @@ services:
       - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
 COMPOSE
 
-    # Patch IMMICH_PORT and DATA_DIR into compose (they come from outside the heredoc)
     sed -i "s|\${IMMICH_PORT:-2283}|${port}|g" "${COMPOSE_DIR}/immich/docker-compose.yml"
     sed -i "s|\${DATA_DIR:-/opt/self-hosting/data}|${DATA_DIR}|g" "${COMPOSE_DIR}/immich/docker-compose.yml"
 
@@ -1420,8 +1238,6 @@ services:
     environment:
       - JELLYFIN_PublishedServerUrl=http://${ip}:${port}
 EOF
-    # network_mode: host means Jellyfin binds port 8096 directly — no ports: mapping needed.
-
     require_port "$port" jellyfin
     info "Starting Jellyfin…"
     dc "${COMPOSE_DIR}/jellyfin" up -d
@@ -1506,8 +1322,8 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=${tz}
-      - PASSWORD=${password}
-      - SUDO_PASSWORD=${sudo_password}
+      - PASSWORD=\${CODESERVER_PASSWORD}
+      - SUDO_PASSWORD=\${CODESERVER_SUDO_PASSWORD}
 EOF
 
     require_port "$port" codeserver
@@ -1518,10 +1334,6 @@ EOF
     success "code-server    → http://${ip}:${port}"
     info  "Password       → (see ${COMPOSE_DIR}/codeserver/.env)"
 }
-
-# =============================================================
-# Phase 6 — Networking & VPN Services
-# =============================================================
 
 setup_pritunl() {
     local ip; ip=$(get_current_ip)
@@ -1558,7 +1370,6 @@ services:
     command: mongod --quiet
 EOF
 
-    # Pritunl uses network_mode: host — binds port ${port} directly
     require_port "$port" pritunl
     require_port 27017 pritunl
     info "Starting Pritunl VPN…"
@@ -1566,7 +1377,6 @@ EOF
     mark_installed pritunl
     update_dashboard
 
-    # Extract the one-time setup key from logs (may take a few seconds)
     local setup_key=""
     local attempts=0
     until [[ -n "$setup_key" ]] || (( attempts++ >= 15 )); do
@@ -1593,7 +1403,6 @@ setup_headscale() {
 
     local port="${SVC_PORT[headscale]}"
 
-    # Generate headscale config.yaml
     cat > "${CONFIG_DIR}/headscale/config.yaml" << EOF
 ---
 server_url: http://${ip}:${port}
@@ -1663,10 +1472,6 @@ EOF
     info  "  On client: tailscale up --login-server http://${ip}:${port}"
 }
 
-# =============================================================
-# Phase 7 — Monitoring Stack
-# =============================================================
-
 setup_uptimekuma() {
     local ip; ip=$(get_current_ip)
     mkdir -p "${COMPOSE_DIR}/uptimekuma" "${DATA_DIR}/uptimekuma"
@@ -1725,8 +1530,6 @@ services:
       - DOCKER_HOST=unix:///var/run/docker.sock
       - NETDATA_DISABLE_CLOUD=1
 EOF
-    # network_mode: host — binds directly to port ${port}
-
     require_port "$port" netdata
     info "Starting Netdata…"
     dc "${COMPOSE_DIR}/netdata" up -d
@@ -1743,7 +1546,6 @@ setup_prometheus() {
 
     local port="${SVC_PORT[prometheus]}"
 
-    # Generate prometheus.yml — scrapes itself and Netdata (if installed)
     cat > "${CONFIG_DIR}/prometheus/prometheus.yml" << 'EOF'
 global:
   scrape_interval: 15s
@@ -1781,7 +1583,6 @@ services:
     user: "65534:65534"
 EOF
 
-    # Fix ownership for the nobody user Prometheus runs as
     chown -R 65534:65534 "${DATA_DIR}/prometheus"
 
     require_port "$port" prometheus
@@ -1809,7 +1610,6 @@ GF_ADMIN_PASSWORD=${admin_pass}
 EOF
     chmod 600 "${COMPOSE_DIR}/grafana/.env"
 
-    # Provision Prometheus datasource automatically
     cat > "${CONFIG_DIR}/grafana/provisioning/datasources/prometheus.yml" << 'EOF'
 apiVersion: 1
 datasources:
@@ -1817,7 +1617,7 @@ datasources:
     type: prometheus
     url: http://localhost:9090
     isDefault: true
-    access: proxy
+    access: server
     editable: false
 EOF
 
@@ -1834,11 +1634,10 @@ services:
     environment:
       - GF_SERVER_HTTP_PORT=${port}
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${admin_pass}
+      - GF_SECURITY_ADMIN_PASSWORD=\${GF_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
 EOF
 
-    # Grafana runs as uid 472
     chown -R 472:472 "${DATA_DIR}/grafana"
 
     require_port "$port" grafana
@@ -1876,7 +1675,6 @@ services:
     restart: always
     ports:
       - "${port}:8000"
-    # gRPC port 9000 is internal — only the agent needs it, via Docker network
     volumes:
       - ${DATA_DIR}/woodpecker:/var/lib/woodpecker
     environment:
@@ -1915,10 +1713,6 @@ EOF
     info  "     ${COMPOSE_DIR}/woodpecker/.env"
     info  "  3. Restart: sudo bash setup.sh --restart woodpecker"
 }
-
-# =============================================================
-# Uninstall Functions  (Phase 9)
-# =============================================================
 
 restart_service() {
     local name="$1"
@@ -1986,9 +1780,7 @@ uninstall_service() {
 
     info "Uninstalling ${name}…"
 
-    # Caddy is a host systemd service, not a Docker container
     if [[ "$name" == "caddy" ]]; then
-        # Refuse if any HTTPS-dependent service is still installed
         local blocking=()
         for svc in "${SVC_NAMES[@]}"; do
             [[ "${SVC_NEEDS_HTTPS[$svc]:-false}" == "true" ]] || continue
@@ -2013,19 +1805,15 @@ Uninstall them first, or use --uninstall-all."
         return 0
     fi
 
-    # Stop and remove the container(s) via Compose if a compose file exists
     local compose_dir="${COMPOSE_DIR}/${name}"
     if [[ -f "${compose_dir}/docker-compose.yml" ]]; then
         dc "$compose_dir" down --remove-orphans 2>/dev/null || true
     else
-        # Fallback: try removing a container by the service name directly
         docker rm -f "$name" 2>/dev/null || true
     fi
 
-    # Remove compose directory (contains generated config + .env, not user data)
     rm -rf "$compose_dir"
 
-    # Remove generated config directory and persistent data when --purge is given
     if [[ "$purge" == "true" ]]; then
         local do_purge=false
         if [[ "$confirmed" == "true" ]]; then
@@ -2048,12 +1836,10 @@ Uninstall them first, or use --uninstall-all."
 
     mark_uninstalled "$name"
 
-    # If this was an HTTPS service, rebuild Caddyfile without it
     if [[ "${SVC_NEEDS_HTTPS[$name]:-false}" == "true" ]]; then
         update_caddy
     fi
 
-    # Refresh dashboard to remove the tile
     update_dashboard
 
     success "${name} uninstalled."
@@ -2064,7 +1850,6 @@ uninstall_all() {
 
     info "Uninstalling all services…"
 
-    # For --purge, require a single upfront confirmation before wiping everything
     local confirmed=false
     if [[ "$purge" == "true" ]]; then
         warn  "PURGE: All service data under ${DATA_DIR}/ will be permanently deleted."
@@ -2080,7 +1865,6 @@ uninstall_all() {
         fi
     fi
 
-    # Reverse order so dependencies are removed last
     local -a installed=()
     for name in "${SVC_NAMES[@]}"; do
         is_installed "$name" && installed+=("$name")
@@ -2104,8 +1888,6 @@ uninstall_all() {
     success "All services uninstalled."
 }
 
-# Delete leftover data/config for a service that is already uninstalled.
-# Safe to call any time; will not touch a currently-installed service.
 purge_data() {
     local name="$1"
 
@@ -2136,7 +1918,6 @@ purge_data() {
     success "Purged data for ${name}."
 }
 
-# Delete leftover data for all services that are not currently installed.
 purge_all_data() {
     local -a orphans=()
     for name in "${SVC_NAMES[@]}"; do
@@ -2180,17 +1961,12 @@ remove_systemd_units() {
     success "Systemd units removed."
 }
 
-# =============================================================
-# Phase 8 — IP Change Handling & Reboot Persistence
-# =============================================================
-
 handle_ip_change() {
     local old_ip="$1"
     local new_ip="$2"
 
     info "IP change: ${old_ip} → ${new_ip}"
 
-    # Append to change log
     mkdir -p "${LOGS_DIR}"
     echo "$(date '+%Y-%m-%d %H:%M:%S')  ${old_ip} → ${new_ip}" >> "${LOGS_DIR}/ip-changes.log"
 
@@ -2211,7 +1987,6 @@ handle_ip_change() {
                 success "caddy: Caddyfile updated and reloaded."
                 ;;
             headscale)
-                # IP lives in config.yaml (server_url), not in docker-compose.yml
                 local hs_cfg="${CONFIG_DIR}/headscale/config.yaml"
                 if [[ -f "$hs_cfg" ]]; then
                     sed -i "s|${old_ip}|${new_ip}|g" "$hs_cfg"
@@ -2220,8 +1995,6 @@ handle_ip_change() {
                 fi
                 ;;
             *)
-                # Generic: replace every occurrence of old IP in docker-compose.yml
-                # and .env (if present), then force-recreate with the new config.
                 local compose_file="${COMPOSE_DIR}/${name}/docker-compose.yml"
                 local env_file="${COMPOSE_DIR}/${name}/.env"
                 [[ -f "$env_file" ]]     && sed -i "s|${old_ip}|${new_ip}|g" "$env_file"
@@ -2237,7 +2010,6 @@ handle_ip_change() {
     success "IP change complete. All services reconfigured for ${new_ip}."
 }
 
-# Write the polling daemon script to SCRIPTS_DIR.
 create_ip_monitor_script() {
     mkdir -p "${SCRIPTS_DIR}"
     cat > "${SCRIPTS_DIR}/ip-monitor.sh" << EOF
@@ -2268,16 +2040,12 @@ EOF
     success "IP monitor script → ${SCRIPTS_DIR}/ip-monitor.sh"
 }
 
-# Install and enable the systemd ip-monitor service.
-# Also copies this script to INSTALL_DIR for a stable invocation path.
 install_systemd_services() {
-    # Skip if the unit file is already in place and the service is running
     if systemctl is-active --quiet self-hosting-ip-monitor 2>/dev/null; then
         dim "  ↷ ip-monitor service already active — skipping"
         return 0
     fi
 
-    # Copy setup.sh to a stable location so ip-monitor.sh can call it
     if [[ "${SCRIPT_PATH}" != "${INSTALL_DIR}/setup.sh" ]]; then
         cp "${SCRIPT_PATH}" "${INSTALL_DIR}/setup.sh"
         chmod 755 "${INSTALL_DIR}/setup.sh"
@@ -2311,12 +2079,7 @@ EOF
 }
 
 
-# =============================================================
-# Main — Argument Parsing & Orchestration
-# =============================================================
-
 main() {
-    # --- Defaults ---
     local do_all=false
     local do_uninstall_all=false
     local do_purge=false
@@ -2332,7 +2095,7 @@ main() {
 
     [[ $# -eq 0 ]] && { print_usage; exit 0; }
 
-    # --- Parse arguments ---
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --help|-h)
@@ -2348,8 +2111,6 @@ main() {
                 do_all=true ;;
 
             --purge)
-                # Standalone mode: --purge <service|all>  (service already uninstalled)
-                # Modifier mode:   --uninstall <svc> --purge  (remove + delete in one step)
                 if [[ -n "${2:-}" ]] && { is_valid_service "${2:-}" || [[ "${2:-}" == "all" ]]; }; then
                     shift
                     purge_queue+=("$1")
@@ -2400,11 +2161,12 @@ main() {
             --update-ip)
                 shift
                 [[ -z "${1:-}" ]] && die "--update-ip requires an IP address."
+                [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+                    || die "Invalid IP address: '$1'"
                 update_ip="$1"
                 ;;
 
             --*)
-                # Treat any remaining --flag as a service name
                 local svc="${1#--}"
                 is_valid_service "$svc" || die "Unknown option: '$1'. Run --help for usage."
                 install_queue+=("$svc")
@@ -2417,14 +2179,13 @@ main() {
         shift
     done
 
-    # --- Validate flag combinations ---
-    # do_purge=true means modifier mode — only valid alongside an uninstall operation
+    # --purge as modifier requires an uninstall target
     if $do_purge && [[ ${#uninstall_queue[@]} -eq 0 ]] && ! $do_uninstall_all; then
         die "--purge (as modifier) requires --uninstall <service> or --uninstall-all.
 To delete data for an already-uninstalled service use: --purge <service|all>"
     fi
 
-    # --- Stop path (requires root, handled early) ---
+
     if [[ ${#stop_queue[@]} -gt 0 ]]; then
         require_root
         detect_docker_compose
@@ -2434,7 +2195,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
-    # --- Restart path (requires root, handled early) ---
+
     if [[ ${#restart_queue[@]} -gt 0 ]]; then
         require_root
         detect_docker_compose
@@ -2444,11 +2205,11 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
-    # --- No-root operations (exit immediately after) ---
+
     $do_list           && { list_services;  exit 0; }
     $do_list_installed && { list_installed; exit 0; }
 
-    # --- export-cert: requires root + DATA_DIR to exist ---
+
     if $do_export_cert; then
         require_root
         init_dirs
@@ -2456,7 +2217,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
-    # --- Everything below requires root ---
+
     require_root
     check_os
     install_docker
@@ -2464,7 +2225,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
     init_dirs
     detect_docker_compose
 
-    # --- IP update (called by ip-monitor service) ---
+
     if [[ -n "$update_ip" ]]; then
         local old_ip
         old_ip=$(cat "${IP_FILE}" 2>/dev/null || get_current_ip)
@@ -2477,7 +2238,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
-    # --- Standalone purge path ---
+
     if [[ ${#purge_queue[@]} -gt 0 ]]; then
         for target in "${purge_queue[@]}"; do
             if [[ "$target" == "all" ]]; then
@@ -2489,7 +2250,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
-    # --- Uninstall path ---
+
     if $do_uninstall_all; then
         uninstall_all "$do_purge"
         exit 0
@@ -2501,13 +2262,10 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
-    # --- Install path ---
+
     $do_all && install_queue=("${SVC_NAMES[@]}")
     [[ ${#install_queue[@]} -eq 0 ]] && { print_usage; exit 0; }
 
-    # Build the final install queue, auto-prepending system dependencies:
-    #   1. dashboard — always first (it's the homepage)
-    #   2. caddy    — prepended when any HTTPS-needing service is in the queue
     local -a final_queue=()
 
     local needs_dashboard=true
@@ -2531,17 +2289,17 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
 
     final_queue+=("${install_queue[@]}")
 
-    # --- Record current IP ---
+
     local current_ip
     current_ip=$(get_current_ip)
     echo "$current_ip" > "${IP_FILE}"
 
-    header "Self-Hosting Setup  v${VERSION}"
+    header "Homelab Setup  v${VERSION}"
     info "Server IP    : ${C_BOLD}${current_ip}${C_RESET}"
     info "Install root : ${INSTALL_DIR}"
     blank
 
-    # --- Run installs ---
+
     local installed_count=0
     local -a failed_svcs=()
     for svc in "${final_queue[@]}"; do
@@ -2580,5 +2338,6 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
     fi
     blank
 }
+
 
 main "$@"
