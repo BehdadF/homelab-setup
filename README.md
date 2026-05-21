@@ -8,13 +8,22 @@ Each service runs in Docker with `restart: always`. A [Homer](https://github.com
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/behdadf/homelab-setup/main/setup.sh -o setup.sh
+```
 
+```bash
 bash setup.sh --list
+```
+
+```bash
 sudo bash setup.sh --vaultwarden --nextcloud
+```
+
+```bash
 sudo bash setup.sh --all
 ```
 
 After the first install, `setup.sh` is copied to `/opt/self-hosting/setup.sh`:
+
 ```bash
 sudo bash /opt/self-hosting/setup.sh --immich
 ```
