@@ -1828,7 +1828,7 @@ setup_authentik() {
     local ip; ip=$(get_current_ip)
     mkdir -p "${COMPOSE_DIR}/authentik" \
              "${DATA_DIR}/authentik/db" \
-             "${DATA_DIR}/authentik/media" \
+             "${DATA_DIR}/authentik/data" \
              "${DATA_DIR}/authentik/templates" \
              "${DATA_DIR}/authentik/certs"
 
@@ -1853,42 +1853,41 @@ services:
     container_name: authentik-server
     restart: always
     command: server
+    shm_size: 512mb
     ports:
       - "${port}:9443"
     volumes:
-      - ${DATA_DIR}/authentik/media:/media
+      - ${DATA_DIR}/authentik/data:/data
       - ${DATA_DIR}/authentik/templates:/templates
-      - ${DATA_DIR}/authentik/certs:/certs
     environment:
       - AUTHENTIK_POSTGRESQL__HOST=authentik-db
       - AUTHENTIK_POSTGRESQL__USER=authentik
       - AUTHENTIK_POSTGRESQL__NAME=authentik
       - AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASSWORD}
       - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_REDIS__HOST=authentik-redis
     depends_on:
       - authentik-db
-      - authentik-redis
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:latest
     container_name: authentik-worker
     restart: always
     command: worker
+    shm_size: 512mb
+    user: root
     volumes:
-      - ${DATA_DIR}/authentik/media:/media
-      - ${DATA_DIR}/authentik/templates:/templates
+      - ${DATA_DIR}/authentik/data:/data
       - ${DATA_DIR}/authentik/certs:/certs
+      - ${DATA_DIR}/authentik/templates:/templates
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - AUTHENTIK_POSTGRESQL__HOST=authentik-db
       - AUTHENTIK_POSTGRESQL__USER=authentik
       - AUTHENTIK_POSTGRESQL__NAME=authentik
       - AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASSWORD}
       - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_REDIS__HOST=authentik-redis
     depends_on:
       - authentik-db
-      - authentik-redis
 
   authentik-db:
     image: postgres:16-alpine
@@ -1900,14 +1899,12 @@ services:
       - POSTGRES_PASSWORD=\${AUTHENTIK_DB_PASSWORD}
     volumes:
       - ${DATA_DIR}/authentik/db:/var/lib/postgresql/data
-
-  authentik-redis:
-    image: redis:8-alpine
-    container_name: authentik-redis
-    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d authentik -U authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 EOF
-
-    chown -R 1000:1000 "${DATA_DIR}/authentik/media" "${DATA_DIR}/authentik/templates" "${DATA_DIR}/authentik/certs"
 
     require_port "$port" authentik
     info "Starting Authentik…"
@@ -1917,6 +1914,7 @@ EOF
     success "Authentik      → https://${ip}:${port}"
     info  "Create your admin account at https://${ip}:${port}/if/flow/initial-setup/"
     warn  "Accept the self-signed certificate warning in your browser."
+    warn  "First startup takes 1–2 minutes while migrations run."
 }
 
 setup_linkding() {
