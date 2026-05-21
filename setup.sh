@@ -1417,16 +1417,16 @@ EOF
     dc "${COMPOSE_DIR}/pritunl" up -d
     mark_installed pritunl
 
-    # Wait for Pritunl to finish initial setup, then rebind web UI to our port
-    info "Waiting for Pritunl to initialize…"
+    info "Configuring Pritunl web UI on port ${port}…"
     local attempts=0
-    until docker exec pritunl pritunl set-setting app.server_port "$port" &>/dev/null \
-          || (( attempts++ >= 30 )); do
+    until docker exec pritunl-mongo mongosh --quiet --eval \
+        "db.settings.updateOne({_id:\"app\"},{\$set:{server_port:${port},redirect_server:false}})" \
+        localhost:27017/pritunl 2>/dev/null | grep -q '"modifiedCount": 1\|"matchedCount": 1' \
+        || (( attempts++ >= 30 )); do
         sleep 2
     done
 
     if (( attempts < 30 )); then
-        docker exec pritunl pritunl set-setting app.redirect_server false &>/dev/null || true
         docker restart pritunl &>/dev/null
         sleep 3
         success "Pritunl web UI bound to port ${port}."
