@@ -2098,6 +2098,12 @@ EOF
 
 install_systemd_services() {
     if [[ "${SCRIPT_PATH}" != "${INSTALL_DIR}/setup.sh" ]]; then
+        if [[ -f "${INSTALL_DIR}/setup.sh" ]] && ! diff -q "${SCRIPT_PATH}" "${INSTALL_DIR}/setup.sh" &>/dev/null; then
+            warn "This will overwrite ${INSTALL_DIR}/setup.sh with the version you're running."
+            printf "  Continue? [Y/n] "
+            local answer; read -r answer
+            [[ "$answer" =~ ^[Nn]$ ]] && { info "Kept existing ${INSTALL_DIR}/setup.sh."; return 0; }
+        fi
         cp "${SCRIPT_PATH}" "${INSTALL_DIR}/setup.sh"
         chmod 755 "${INSTALL_DIR}/setup.sh"
         info "Installed setup.sh → ${INSTALL_DIR}/setup.sh"
