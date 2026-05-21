@@ -94,6 +94,7 @@ reg netdata      19999  "Netdata — real-time system performance metrics"     m
 reg prometheus   9090   "Prometheus — metrics collection & alerting"         monitoring false
 reg grafana      3100   "Grafana — metrics visualization dashboards"         monitoring false
 reg freshrss     8280   "FreshRSS — RSS feed aggregator"                     productivity false
+reg adguard      8053   "AdGuard Home — network-wide DNS ad blocker"         network    false
 
 get_arch() {
     local arch
@@ -1771,6 +1772,53 @@ EOF
     info  "  2. Copy the Client ID and Secret into:"
     info  "     ${COMPOSE_DIR}/woodpecker/.env"
     info  "  3. Restart: sudo bash setup.sh --restart woodpecker"
+}
+
+setup_adguard() {
+    local ip; ip=$(get_current_ip)
+    mkdir -p "${COMPOSE_DIR}/adguard" \
+             "${DATA_DIR}/adguard/work" \
+             "${DATA_DIR}/adguard/conf"
+
+    local port="${SVC_PORT[adguard]}"
+
+    # systemd-resolved holds port 53 — disable its stub listener
+    if ss -tlnp 2>/dev/null | grep -q ':53 .*systemd-resolve'; then
+        info "Disabling systemd-resolved stub listener (port 53)…"
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat > /etc/systemd/resolved.conf.d/no-stub.conf << 'EOF'
+[Resolve]
+DNSStubListener=no
+EOF
+        ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+        systemctl restart systemd-resolved
+        success "systemd-resolved stub disabled."
+    fi
+
+    cat > "${COMPOSE_DIR}/adguard/docker-compose.yml" << EOF
+services:
+  adguard:
+    image: adguard/adguardhome:latest
+    container_name: adguard
+    restart: always
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "${port}:3000"
+    volumes:
+      - ${DATA_DIR}/adguard/work:/opt/adguardhome/work
+      - ${DATA_DIR}/adguard/conf:/opt/adguardhome/conf
+EOF
+
+    require_port 53 adguard
+    require_port "$port" adguard
+    info "Starting AdGuard Home…"
+    dc "${COMPOSE_DIR}/adguard" up -d
+    mark_installed adguard
+    update_dashboard
+    success "AdGuard Home   → http://${ip}:${port}"
+    info  "Complete the setup wizard on first visit."
+    warn  "Point your router's DNS to ${ip} for network-wide ad blocking."
 }
 
 setup_freshrss() {

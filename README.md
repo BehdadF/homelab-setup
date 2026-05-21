@@ -52,6 +52,7 @@ sudo bash /opt/self-hosting/setup.sh --immich
 | Prometheus | 9090 | Monitoring | Metrics collection |
 | Grafana | 3100 | Monitoring | Metrics dashboards |
 | FreshRSS | 8280 | Productivity | RSS feed aggregator |
+| AdGuard Home | 8053 / 53 | Network | DNS ad blocker |
 
 ## HTTPS
 
