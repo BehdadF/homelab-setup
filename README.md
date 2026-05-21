@@ -137,6 +137,8 @@ Generate a new key per device. Add `--reusable` only if you need one key for mul
 
 **MinIO** — console on `:9001`, S3 API on `:9100`.
 
+**AdGuard Home** — during the setup wizard, set the web UI listen address to `0.0.0.0:3000` (not port 80, which Homer uses). The script maps it to `:8053` externally. After setup, point your router's DHCP DNS to the Pi's IP for network-wide ad blocking. The script disables `systemd-resolved`'s stub listener automatically if needed.
+
 ## File Layout
 
 ```
