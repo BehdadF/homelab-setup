@@ -536,7 +536,7 @@ svc_url() {
     local name="$1" ip="$2"
     local scheme="http"
     [[ "${SVC_NEEDS_HTTPS[$name]:-false}" == "true" ]] && scheme="https"
-    [[ "$name" == "pritunl" ]] && scheme="https"
+    [[ "$name" == "pritunl" || "$name" == "authentik" ]] && scheme="https"
     echo "${scheme}://${ip}:${SVC_PORT[$name]}"
 }
 
