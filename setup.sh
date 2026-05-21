@@ -1907,6 +1907,8 @@ services:
     restart: always
 EOF
 
+    chown -R 1000:1000 "${DATA_DIR}/authentik/media" "${DATA_DIR}/authentik/templates" "${DATA_DIR}/authentik/certs"
+
     require_port "$port" authentik
     info "Starting Authentik…"
     dc "${COMPOSE_DIR}/authentik" up -d
