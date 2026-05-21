@@ -97,6 +97,7 @@ reg freshrss     8280   "FreshRSS — RSS feed aggregator"                     p
 reg adguard      8053   "AdGuard Home — network-wide DNS ad blocker"         network    false
 reg linkding     8380   "Linkding — bookmark manager"                        productivity false
 reg authentik    9443   "Authentik — SSO & identity provider"                security   false
+reg ollama       8480   "Ollama + Open WebUI — local LLM chat"               dev        false
 
 get_arch() {
     local arch
@@ -1915,6 +1916,52 @@ EOF
     info  "Create your admin account at https://${ip}:${port}/if/flow/initial-setup/"
     warn  "Accept the self-signed certificate warning in your browser."
     warn  "First startup takes 1–2 minutes while migrations run."
+}
+
+setup_ollama() {
+    local ip; ip=$(get_current_ip)
+    mkdir -p "${COMPOSE_DIR}/ollama" \
+             "${DATA_DIR}/ollama/models" \
+             "${DATA_DIR}/ollama/webui"
+
+    local port="${SVC_PORT[ollama]}"
+
+    cat > "${COMPOSE_DIR}/ollama/docker-compose.yml" << EOF
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${DATA_DIR}/ollama/models:/root/.ollama
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: always
+    ports:
+      - "${port}:8080"
+    volumes:
+      - ${DATA_DIR}/ollama/webui:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+EOF
+
+    require_port 11434 ollama
+    require_port "$port" ollama
+    info "Starting Ollama + Open WebUI…"
+    dc "${COMPOSE_DIR}/ollama" up -d
+    mark_installed ollama
+    update_dashboard
+    success "Open WebUI     → http://${ip}:${port}"
+    success "Ollama API     → http://${ip}:11434"
+    info  "Create your account on first visit, then pull a model:"
+    info  "  docker exec ollama ollama pull tinyllama"
+    warn  "Small models only on Pi (tinyllama, phi). 7B+ models need 8GB+ RAM."
 }
 
 setup_linkding() {

@@ -55,6 +55,7 @@ sudo bash /opt/self-hosting/setup.sh --immich
 | AdGuard Home | 8053 / 53 | Network | DNS ad blocker |
 | Linkding | 8380 | Productivity | Bookmark manager |
 | Authentik | 9443 | Security | SSO & identity provider |
+| Ollama + Open WebUI | 8480 / 11434 | Dev | Local LLM chat |
 
 ## HTTPS
 
