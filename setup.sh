@@ -45,6 +45,7 @@ blank()   { echo ""; }
 # reg <name> <port> "<description>" <category> [ip_aware] [needs_https]
 declare -a  SVC_NAMES
 declare -A  SVC_PORT SVC_DESC SVC_CAT SVC_IP_AWARE SVC_NEEDS_HTTPS
+declare -A  SVC_RAM_MB
 
 reg() {
     local name="$1" port="$2" desc="$3" cat="$4" \
@@ -280,6 +281,38 @@ port_is_free() {
     ! ss -tln 2>/dev/null | awk 'NR>1{print $4}' | grep -qE ":${1}$"
 }
 
+check_disk() {
+    local svc="$1"
+    local free_mb
+    free_mb=$(df -m "${DATA_DIR}" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
+    if (( free_mb < 1024 )); then
+        warn "${svc}: only ${free_mb}MB disk free on ${DATA_DIR}."
+        printf "  Continue anyway? [y/N] "
+        local answer; read -r answer
+        [[ "$answer" =~ ^[Yy]$ ]] || { info "Skipping ${svc}."; return 1; }
+    fi
+}
+
+check_runtime() {
+    local svc="$1"
+    local ram_mb cpu_count load_1m
+    ram_mb=$(awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
+    cpu_count=$(nproc 2>/dev/null || echo 1)
+    load_1m=$(awk '{printf "%d", $1}' /proc/loadavg 2>/dev/null || echo 0)
+
+    local problems=()
+    (( ram_mb < 512 )) && problems+=("${ram_mb}MB RAM free")
+    (( load_1m >= cpu_count )) && problems+=("system load ${load_1m} (${cpu_count} cores)")
+
+    if [[ ${#problems[@]} -gt 0 ]]; then
+        local IFS=", "
+        warn "${svc}: ${problems[*]}. It may run slowly or get killed."
+        printf "  Start anyway? [y/N] "
+        local answer; read -r answer
+        [[ "$answer" =~ ^[Yy]$ ]] || { info "${svc} installed but not started. Use --restart ${svc} later."; return 1; }
+    fi
+}
+
 require_port() {
     local port="$1" svc="${2:-service}"
     port_is_free "$port" \
@@ -324,6 +357,13 @@ detect_docker_compose() {
 dc() {
     [[ -n "$DC_CMD" ]] || die "Docker Compose not available. Run prerequisites first."
     local service_dir="$1"; shift
+
+    if [[ "${1:-}" == "up" ]]; then
+        local svc_name
+        svc_name=$(basename "$service_dir")
+        check_runtime "$svc_name" || return 1
+    fi
+
     local -a cmd
     IFS=' ' read -ra cmd <<< "$DC_CMD"
     cmd+=(-f "${service_dir}/docker-compose.yml")
@@ -2308,6 +2348,10 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
             continue
         fi
         header "Installing: ${svc}"
+        if ! check_disk "$svc"; then
+            failed_svcs+=("$svc")
+            continue
+        fi
         if ( "setup_${svc}" ); then
             (( installed_count++ )) || true
         else
