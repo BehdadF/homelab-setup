@@ -1922,9 +1922,10 @@ EOF
     mark_installed authentik
     update_dashboard
     success "Authentik      → https://${ip}:${port}"
-    info  "Create your admin account at https://${ip}:${port}/if/flow/initial-setup/"
+    warn  "IMPORTANT: Before using Authentik, go to this URL to create your admin account:"
+    warn  "  https://${ip}:${port}/if/flow/initial-setup/"
+    warn  "The main page will show 'Not Found' until you complete this step."
     warn  "Accept the self-signed certificate warning in your browser."
-    warn  "First startup takes 1–2 minutes while migrations run."
 }
 
 setup_ollama() {
