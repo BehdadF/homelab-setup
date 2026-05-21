@@ -1818,6 +1818,7 @@ EOF
     update_dashboard
     success "AdGuard Home   → http://${ip}:${port}"
     info  "Complete the setup wizard on first visit."
+    warn  "In the wizard, set web UI listen address to 0.0.0.0:3000 (not port 80)."
     warn  "Point your router's DNS to ${ip} for network-wide ad blocking."
 }
 
