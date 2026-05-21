@@ -54,6 +54,7 @@ sudo bash /opt/self-hosting/setup.sh --immich
 | FreshRSS | 8280 | Productivity | RSS feed aggregator |
 | AdGuard Home | 8053 / 53 | Network | DNS ad blocker |
 | Linkding | 8380 | Productivity | Bookmark manager |
+| Authentik | 9443 | Security | SSO & identity provider |
 
 ## HTTPS
 

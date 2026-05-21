@@ -96,6 +96,7 @@ reg grafana      3100   "Grafana — metrics visualization dashboards"         m
 reg freshrss     8280   "FreshRSS — RSS feed aggregator"                     productivity false
 reg adguard      8053   "AdGuard Home — network-wide DNS ad blocker"         network    false
 reg linkding     8380   "Linkding — bookmark manager"                        productivity false
+reg authentik    9443   "Authentik — SSO & identity provider"                security   false
 
 get_arch() {
     local arch
@@ -1821,6 +1822,99 @@ EOF
     info  "Complete the setup wizard on first visit."
     warn  "In the wizard, set web UI listen address to 0.0.0.0:3000 (not port 80)."
     warn  "Point your router's DNS to ${ip} for network-wide ad blocking."
+}
+
+setup_authentik() {
+    local ip; ip=$(get_current_ip)
+    mkdir -p "${COMPOSE_DIR}/authentik" \
+             "${DATA_DIR}/authentik/db" \
+             "${DATA_DIR}/authentik/media" \
+             "${DATA_DIR}/authentik/templates" \
+             "${DATA_DIR}/authentik/certs"
+
+    local port="${SVC_PORT[authentik]}"
+    local _env="${COMPOSE_DIR}/authentik/.env"
+    local db_pass; db_pass=$(load_env_var "$_env" AUTHENTIK_DB_PASSWORD)
+    local secret_key; secret_key=$(load_env_var "$_env" AUTHENTIK_SECRET_KEY)
+    db_pass=${db_pass:-$(gen_password)}
+    secret_key=${secret_key:-$(gen_password)$(gen_password)}
+    [[ -f "$_env" ]] && info "Reusing existing Authentik credentials."
+
+    cat > "${COMPOSE_DIR}/authentik/.env" << EOF
+AUTHENTIK_DB_PASSWORD=${db_pass}
+AUTHENTIK_SECRET_KEY=${secret_key}
+EOF
+    chmod 600 "${COMPOSE_DIR}/authentik/.env"
+
+    cat > "${COMPOSE_DIR}/authentik/docker-compose.yml" << EOF
+services:
+  authentik-server:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: authentik-server
+    restart: always
+    command: server
+    ports:
+      - "${port}:9443"
+    volumes:
+      - ${DATA_DIR}/authentik/media:/media
+      - ${DATA_DIR}/authentik/templates:/templates
+      - ${DATA_DIR}/authentik/certs:/certs
+    environment:
+      - AUTHENTIK_POSTGRESQL__HOST=authentik-db
+      - AUTHENTIK_POSTGRESQL__USER=authentik
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASSWORD}
+      - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_REDIS__HOST=authentik-redis
+    depends_on:
+      - authentik-db
+      - authentik-redis
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: authentik-worker
+    restart: always
+    command: worker
+    volumes:
+      - ${DATA_DIR}/authentik/media:/media
+      - ${DATA_DIR}/authentik/templates:/templates
+      - ${DATA_DIR}/authentik/certs:/certs
+    environment:
+      - AUTHENTIK_POSTGRESQL__HOST=authentik-db
+      - AUTHENTIK_POSTGRESQL__USER=authentik
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASSWORD}
+      - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_REDIS__HOST=authentik-redis
+    depends_on:
+      - authentik-db
+      - authentik-redis
+
+  authentik-db:
+    image: postgres:16-alpine
+    container_name: authentik-db
+    restart: always
+    environment:
+      - POSTGRES_DB=authentik
+      - POSTGRES_USER=authentik
+      - POSTGRES_PASSWORD=\${AUTHENTIK_DB_PASSWORD}
+    volumes:
+      - ${DATA_DIR}/authentik/db:/var/lib/postgresql/data
+
+  authentik-redis:
+    image: redis:8-alpine
+    container_name: authentik-redis
+    restart: always
+EOF
+
+    require_port "$port" authentik
+    info "Starting Authentik…"
+    dc "${COMPOSE_DIR}/authentik" up -d
+    mark_installed authentik
+    update_dashboard
+    success "Authentik      → https://${ip}:${port}"
+    info  "Create your admin account at https://${ip}:${port}/if/flow/initial-setup/"
+    warn  "Accept the self-signed certificate warning in your browser."
 }
 
 setup_linkding() {
