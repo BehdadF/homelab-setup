@@ -275,6 +275,82 @@ get_current_ip() {
 
 gen_password() { openssl rand -hex 16; }
 
+# ── ZFS helpers (no-op when ZFS is not available) ────────────
+HAS_ZFS=false
+ZFS_DATA_DATASET=""
+
+zfs_detect() {
+    command -v zfs &>/dev/null || return 0
+    local mnt
+    mnt=$(df --output=source "${DATA_DIR}" 2>/dev/null | tail -1) || return 0
+    if zfs list -H -o name "$mnt" &>/dev/null 2>&1; then
+        HAS_ZFS=true
+        ZFS_DATA_DATASET="$mnt"
+        success "ZFS detected — dataset: ${ZFS_DATA_DATASET}"
+    fi
+}
+
+zfs_snapshot() {
+    $HAS_ZFS || return 0
+    local tag="$1"
+    local snap="${ZFS_DATA_DATASET}@${tag}"
+    if zfs snapshot -r "$snap" 2>/dev/null; then
+        success "ZFS snapshot: ${snap}"
+    else
+        warn "ZFS snapshot failed: ${snap}"
+    fi
+}
+
+zfs_list_snapshots() {
+    if ! $HAS_ZFS; then
+        info "ZFS is not in use — no snapshots available."
+        return 0
+    fi
+    header "ZFS Snapshots"
+    blank
+    zfs list -t snapshot -o name,creation,used -s creation -r "$ZFS_DATA_DATASET"
+    blank
+}
+
+zfs_rollback() {
+    if ! $HAS_ZFS; then
+        die "ZFS is not in use — rollback is not available."
+    fi
+    local svc="$1"
+    local dataset="${ZFS_DATA_DATASET}/${svc}"
+
+    if ! zfs list -H -o name "$dataset" &>/dev/null 2>&1; then
+        dataset="$ZFS_DATA_DATASET"
+    fi
+
+    local latest
+    latest=$(zfs list -t snapshot -H -o name -s creation -r "$dataset" | tail -1)
+    if [[ -z "$latest" ]]; then
+        die "No snapshots found for ${dataset}."
+    fi
+
+    warn "This will roll back to: ${latest}"
+    warn "All changes after this snapshot will be lost."
+    printf "  Type 'yes' to confirm: "
+    local confirm; read -r confirm
+    [[ "$confirm" == "yes" ]] || { info "Rollback cancelled."; return 0; }
+
+    local compose_dir="${COMPOSE_DIR}/${svc}"
+    if [[ -f "${compose_dir}/docker-compose.yml" ]]; then
+        dc "$compose_dir" down 2>/dev/null || true
+    fi
+
+    if zfs rollback -r "$latest"; then
+        success "Rolled back to ${latest}."
+        if [[ -f "${compose_dir}/docker-compose.yml" ]]; then
+            dc "$compose_dir" up -d 2>/dev/null || true
+            success "${svc} restarted."
+        fi
+    else
+        error "Rollback failed. Check 'zfs list -t snapshot' for valid snapshots."
+    fi
+}
+
 load_env_var() {
     local env_file="$1" key="$2"
     if [[ -f "$env_file" ]]; then
@@ -462,8 +538,12 @@ ${C_BOLD}Utilities:${C_RESET}
   --stop <service|all>      Stop a service without removing it; use --restart to bring it back
   --restart <service|all>   Restart a service (or all installed services)
   --export-cert             Re-export Caddy's root CA and print trust instructions
+  --upgrade <service|all>   Pull latest images, snapshot (if ZFS), and restart
   --update-ip <ip>          Reconfigure IP-aware services for a new LAN address
                             (Called automatically by the ip-monitor systemd service)
+  --snapshots               List all ZFS snapshots (requires ZFS)
+  --snapshot <service|all>  Take a ZFS snapshot now (requires ZFS)
+  --rollback <service>      Roll back a service to its most recent ZFS snapshot
   --help, -h                Show this help
 
 ${C_BOLD}Examples:${C_RESET}
@@ -2049,6 +2129,40 @@ EOF
     info  "Create your admin account on first visit."
 }
 
+upgrade_service() {
+    local name="$1"
+
+    if ! is_installed "$name"; then
+        warn "'${name}' is not installed — nothing to upgrade."
+        return 0
+    fi
+
+    if [[ "$name" == "caddy" ]]; then
+        zfs_snapshot "pre-upgrade-caddy-$(date +%Y%m%d-%H%M%S)"
+        info "Upgrading Caddy…"
+        apt-get update -qq && apt-get install -y -qq caddy
+        systemctl restart caddy
+        success "Caddy upgraded and restarted."
+        return 0
+    fi
+
+    local compose_dir="${COMPOSE_DIR}/${name}"
+    if [[ ! -f "${compose_dir}/docker-compose.yml" ]]; then
+        warn "No compose file for ${name} — cannot upgrade."
+        return 1
+    fi
+
+    zfs_snapshot "pre-upgrade-${name}-$(date +%Y%m%d-%H%M%S)"
+
+    info "Pulling latest images for ${name}…"
+    dc "$compose_dir" pull
+
+    info "Recreating ${name} with new images…"
+    dc "$compose_dir" up -d --remove-orphans
+
+    success "${name} upgraded."
+}
+
 restart_service() {
     local name="$1"
 
@@ -2432,6 +2546,10 @@ main() {
     local -a restart_queue=()
     local -a stop_queue=()
     local -a purge_queue=()
+    local -a upgrade_queue=()
+    local do_snapshots=false
+    local -a snapshot_queue=()
+    local rollback_svc=""
 
     [[ $# -eq 0 ]] && { print_usage; exit 0; }
 
@@ -2506,6 +2624,40 @@ main() {
                 update_ip="$1"
                 ;;
 
+            --upgrade)
+                shift
+                [[ -z "${1:-}" ]] && die "--upgrade requires a service name (or 'all')."
+                if [[ "$1" == "all" ]]; then
+                    for svc in "${SVC_NAMES[@]}"; do
+                        is_installed "$svc" && upgrade_queue+=("$svc")
+                    done
+                else
+                    is_valid_service "$1" || die "Unknown service: '$1'. Run --list to see available services."
+                    upgrade_queue+=("$1")
+                fi
+                ;;
+
+            --snapshots)
+                do_snapshots=true ;;
+
+            --snapshot)
+                shift
+                [[ -z "${1:-}" ]] && die "--snapshot requires a service name (or 'all')."
+                if [[ "$1" == "all" ]]; then
+                    snapshot_queue+=("all")
+                else
+                    is_valid_service "$1" || die "Unknown service: '$1'. Run --list to see available services."
+                    snapshot_queue+=("$1")
+                fi
+                ;;
+
+            --rollback)
+                shift
+                [[ -z "${1:-}" ]] && die "--rollback requires a service name."
+                is_valid_service "$1" || die "Unknown service: '$1'. Run --list to see available services."
+                rollback_svc="$1"
+                ;;
+
             --*)
                 local svc="${1#--}"
                 is_valid_service "$svc" || die "Unknown option: '$1'. Run --help for usage."
@@ -2564,6 +2716,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
     check_prerequisites
     init_dirs
     detect_docker_compose
+    zfs_detect
 
 
     if [[ -n "$update_ip" ]]; then
@@ -2590,6 +2743,37 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
         exit 0
     fi
 
+
+    if [[ ${#upgrade_queue[@]} -gt 0 ]]; then
+        for svc in "${upgrade_queue[@]}"; do
+            upgrade_service "$svc"
+        done
+        exit 0
+    fi
+
+    if $do_snapshots; then
+        zfs_detect
+        zfs_list_snapshots
+        exit 0
+    fi
+
+    if [[ ${#snapshot_queue[@]} -gt 0 ]]; then
+        zfs_detect
+        for target in "${snapshot_queue[@]}"; do
+            if [[ "$target" == "all" ]]; then
+                zfs_snapshot "manual-$(date +%Y%m%d-%H%M%S)"
+            else
+                zfs_snapshot "manual-${target}-$(date +%Y%m%d-%H%M%S)"
+            fi
+        done
+        exit 0
+    fi
+
+    if [[ -n "$rollback_svc" ]]; then
+        zfs_detect
+        zfs_rollback "$rollback_svc"
+        exit 0
+    fi
 
     if $do_uninstall_all; then
         uninstall_all "$do_purge"
@@ -2652,6 +2836,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
             failed_svcs+=("$svc")
             continue
         fi
+        zfs_snapshot "pre-install-${svc}-$(date +%Y%m%d-%H%M%S)"
         if ( "setup_${svc}" ); then
             (( installed_count++ )) || true
         else

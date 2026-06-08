@@ -91,7 +91,36 @@ sudo bash setup.sh --uninstall seafile
 sudo bash setup.sh --uninstall seafile --purge
 sudo bash setup.sh --uninstall-all
 sudo bash setup.sh --uninstall-all --purge
+
+sudo bash setup.sh --upgrade immich
+sudo bash setup.sh --upgrade all
 ```
+
+## ZFS Snapshots
+
+If `/opt/self-hosting` is on a ZFS dataset, the script automatically takes a snapshot before each service install. You can also manage snapshots manually:
+
+```bash
+sudo bash setup.sh --snapshots                # list all snapshots
+sudo bash setup.sh --snapshot all             # snapshot everything now
+sudo bash setup.sh --snapshot immich           # snapshot before a manual change
+sudo bash setup.sh --rollback immich           # roll back to the most recent snapshot
+```
+
+The `--upgrade` command also takes a snapshot automatically before pulling new images:
+
+```bash
+sudo bash setup.sh --upgrade immich           # snapshot + pull + restart
+sudo bash setup.sh --upgrade all              # upgrade all installed services
+```
+
+If something breaks after an upgrade, roll back immediately:
+
+```bash
+sudo bash setup.sh --rollback immich
+```
+
+On systems without ZFS, snapshots are silently skipped (upgrades still work, just without rollback safety). `--rollback` requires ZFS.
 
 `--uninstall` removes containers but keeps data. `--purge` deletes data too (requires confirmation).
 
