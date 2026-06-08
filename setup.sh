@@ -441,12 +441,6 @@ dc() {
     [[ -n "$DC_CMD" ]] || die "Docker Compose not available. Run prerequisites first."
     local service_dir="$1"; shift
 
-    if [[ "${1:-}" == "up" ]]; then
-        local svc_name
-        svc_name=$(basename "$service_dir")
-        check_runtime "$svc_name" || return 1
-    fi
-
     local -a cmd
     IFS=' ' read -ra cmd <<< "$DC_CMD"
     cmd+=(-f "${service_dir}/docker-compose.yml")
@@ -2874,7 +2868,7 @@ To delete data for an already-uninstalled service use: --purge <service|all>"
             continue
         fi
         header "Installing: ${svc}"
-        if ! check_disk "$svc"; then
+        if ! check_disk "$svc" || ! check_runtime "$svc"; then
             failed_svcs+=("$svc")
             continue
         fi
