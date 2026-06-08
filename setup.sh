@@ -78,6 +78,7 @@ reg minio        9001   "MinIO — S3-compatible object storage (console)"     s
 # ── Media ────────────────────────────────────────────────────
 reg immich       2283   "Immich — self-hosted Google Photos alternative"     media      false
 reg jellyfin     8096   "Jellyfin — media streaming server"                  media      false
+reg navidrome    4533   "Navidrome — music streaming server"                  media      false
 
 # ── Networking / VPN ─────────────────────────────────────────
 reg pritunl      8888   "Pritunl — OpenVPN / WireGuard VPN server"           network    true
@@ -600,6 +601,7 @@ _svc_icon() {
         minio)       echo "fas fa-database" ;;
         immich)      echo "fas fa-images" ;;
         jellyfin)    echo "fas fa-play-circle" ;;
+        navidrome)   echo "fas fa-music" ;;
         pritunl)     echo "fas fa-user-shield" ;;
         headscale)   echo "fas fa-project-diagram" ;;
         forgejo)     echo "fas fa-code-branch" ;;
@@ -1371,6 +1373,41 @@ EOF
     update_dashboard
     success "Jellyfin       → http://${ip}:${port}"
     info  "Add media to ${DATA_DIR}/jellyfin/media/ and configure libraries on first visit."
+}
+
+setup_navidrome() {
+    local ip; ip=$(get_current_ip)
+    mkdir -p "${COMPOSE_DIR}/navidrome" \
+             "${DATA_DIR}/navidrome/data" \
+             "${DATA_DIR}/navidrome/music"
+
+    local port="${SVC_PORT[navidrome]}"
+
+    cat > "${COMPOSE_DIR}/navidrome/docker-compose.yml" << EOF
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    restart: always
+    ports:
+      - "${port}:4533"
+    volumes:
+      - ${DATA_DIR}/navidrome/data:/data
+      - ${DATA_DIR}/navidrome/music:/music:ro
+    environment:
+      ND_SCANSCHEDULE: 1h
+      ND_LOGLEVEL: info
+      ND_BASEURL: ""
+EOF
+
+    require_port "$port" navidrome
+    info "Starting Navidrome…"
+    dc "${COMPOSE_DIR}/navidrome" up -d
+    mark_installed navidrome
+    update_dashboard
+    success "Navidrome      → http://${ip}:${port}"
+    info  "Create your admin account on first visit."
+    info  "Add music to ${DATA_DIR}/navidrome/music/ — scans automatically every hour."
 }
 
 setup_forgejo() {
