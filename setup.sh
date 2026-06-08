@@ -12,6 +12,7 @@ readonly INSTALL_DIR="/opt/self-hosting"
 readonly COMPOSE_DIR="${INSTALL_DIR}/compose"
 readonly CONFIG_DIR="${INSTALL_DIR}/config"
 readonly DATA_DIR="${INSTALL_DIR}/data"
+readonly MEDIA_DIR="${INSTALL_DIR}/media"
 readonly SCRIPTS_DIR="${INSTALL_DIR}/scripts"
 readonly LOGS_DIR="${INSTALL_DIR}/logs"
 readonly INSTALLED_FILE="${INSTALL_DIR}/.installed"
@@ -1348,7 +1349,9 @@ setup_jellyfin() {
     mkdir -p "${COMPOSE_DIR}/jellyfin" \
              "${DATA_DIR}/jellyfin/config" \
              "${DATA_DIR}/jellyfin/cache" \
-             "${DATA_DIR}/jellyfin/media"
+             "${MEDIA_DIR}/movies" \
+             "${MEDIA_DIR}/tv" \
+             "${MEDIA_DIR}/music"
 
     local port="${SVC_PORT[jellyfin]}"
 
@@ -1362,7 +1365,7 @@ services:
     volumes:
       - ${DATA_DIR}/jellyfin/config:/config
       - ${DATA_DIR}/jellyfin/cache:/cache
-      - ${DATA_DIR}/jellyfin/media:/media
+      - ${MEDIA_DIR}:/media
     environment:
       - JELLYFIN_PublishedServerUrl=http://${ip}:${port}
 EOF
@@ -1372,14 +1375,16 @@ EOF
     mark_installed jellyfin
     update_dashboard
     success "Jellyfin       → http://${ip}:${port}"
-    info  "Add media to ${DATA_DIR}/jellyfin/media/ and configure libraries on first visit."
+    info  "Add media to ${MEDIA_DIR}/ on the host (movies/, tv/, music/)."
+    info  "In Jellyfin UI, use /media as the library path (e.g. /media/movies, /media/tv)."
 }
 
 setup_navidrome() {
     local ip; ip=$(get_current_ip)
     mkdir -p "${COMPOSE_DIR}/navidrome" \
              "${DATA_DIR}/navidrome/data" \
-             "${DATA_DIR}/navidrome/music"
+             "${MEDIA_DIR}/music"
+    chown 1000:1000 "${MEDIA_DIR}/music"
 
     local port="${SVC_PORT[navidrome]}"
 
@@ -1393,7 +1398,7 @@ services:
       - "${port}:4533"
     volumes:
       - ${DATA_DIR}/navidrome/data:/data
-      - ${DATA_DIR}/navidrome/music:/music:ro
+      - ${MEDIA_DIR}/music:/music:ro
     environment:
       ND_SCANSCHEDULE: 1h
       ND_LOGLEVEL: info
@@ -1407,7 +1412,7 @@ EOF
     update_dashboard
     success "Navidrome      → http://${ip}:${port}"
     info  "Create your admin account on first visit."
-    info  "Add music to ${DATA_DIR}/navidrome/music/ — scans automatically every hour."
+    info  "Add music to ${MEDIA_DIR}/music/ — scans automatically every hour."
 }
 
 setup_forgejo() {
